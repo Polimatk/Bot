@@ -18,6 +18,6 @@ jobs:
     - name: Checkout to staging server
       uses: actions/checkout@v2
     - name: Setup Node.js
-      uses: yarn install
+      run: yarn install
     - name: Run tests
       run: yarn test

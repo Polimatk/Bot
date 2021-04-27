@@ -1,0 +1,22 @@
+{
+    "discord": {
+        "token": "ODMzMDk0MTg1NDM0MjE4NTc2.YHtVaw.ppg65Lf_7sSGurlGg_-tKcL6KqY"
+    },
+    "twitch": {
+        "identity": {
+            "username": "Polimatk",
+            "password": "oauth:59b443kwikqpj4ysv4l70exdwcbqw8"
+        },
+        "userId": 679127839
+    },
+    "youtube": {
+        "apiKey": "AIzaSyC-jr9CMeKff0uC8P88MmFoVzvjTN0WQrE",
+        "token": "ya29.a0AfH6SMDueYJ2XDGdy2r2WaY6ylDJyY_4WZvCgXcTgMBKHe7bJA_YIk48NT8WS8KDh1EctPjyDowIOaPh3Ixx85mKQBEdeRI0gJERrVYQ5guu7qiY4eQzhqk6zycocwb2T4WWyFAjLix9i11kH3RaEDztGLVX"
+    },
+    "mysql": {
+        "host": "localhost",
+        "user": "polimatk",
+        "password": "881Abc59",
+        "database": "polimatk"
+    }
+}
