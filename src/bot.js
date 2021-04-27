@@ -1,88 +1,108 @@
+const EventEmitter = require('events');
 const Discord = require('discord.js');
 const Twitch = require('tmi.js');
 const YouTube = require('youtube-live-chat')
-const config = require('./config.json');
 const axios = require('axios').default;
-const WebSocket = require('ws'); // TODO: custom websocket support 
+const WebSocket = require('ws');
 const MySQL = require('mysql');
-const pool = MySQL.createPool(config.mysql);
 const pkg = require('../package.json');
 
-if(process.env.JEST_WORKER_ID === undefined) {
-    // Discord auto-joins
-    const discord = new Discord.Client();
-    discord.login(config.discord.token);
-    console.log('Joined Discord servers.');
-    discord.on('message', function(msg) {
-        if(msg.author.bot) return;
-        var wrapper = new ChatLine('Discord', msg.content, msg.createdTimestamp, function(reply) {
-            msg.reply(reply);
-        });
-        wrapper.handle();
-    });
+const CHECK = {USERS: 2, YOUTUBE_FIRST: 300, YOUTUBE_NEXT: 1}; // Time in seconds between checks
 
-    let twitchChannels = [];
-    let youtubeChannels = [];
-
-    let twitch = null;
-
-    function getUsers() {
-        pool.query('SELECT twitchProfile, youtubeProfile FROM guilds', function(errors, results, fields) {
-            for(var i = 0; i < results.length; i++) {
-                if(results[i].twitchProfile) twitchProfile = JSON.parse(Buffer.from(results[i].twitchProfile, 'base64').toString('utf8'));
-                if(results[i].youtubeProfile) youtubeProfile = JSON.parse(Buffer.from(results[i].youtubeProfile, 'base64').toString('utf8'));
-                if(twitchProfile && !twitchChannels.includes('#' + twitchProfile.login)) {
-                    twitchChannels.push('#' + twitchProfile.login);
-                    if(twitch) {
-                        console.log('Joined Twitch channel.', twitchChannels);
-                        twitch.join('#' + twitchProfile.login);
-                    }
-                }
-                if(youtubeProfile && !youtubeChannels.includes(youtubeProfile.id)) {
-                    youtubeChannels.push(youtubeProfile.id);
-                }
-            }
-            if(!twitch) {
-                twitch = new Twitch.client({
-                    reconnect: true,
-                    identity: config.twitch.identity,
-                    channels: twitchChannels
+class Bot extends EventEmitter {
+    constructor(jest=process.env.JEST_WORKER_ID !== undefined) {
+        super();
+        if(global.bot) return console.warn('Tried to construct bot twice!');
+        this.started = false;
+        this.jest = jest;
+        this.discord = null;
+        this.twitch = null;
+        this.youtubes = {};
+        this.twitchChannels = [];
+        this.youtubeChannels = [];
+        this.config = require(jest ? './example-config.json' : './config.json');
+        this.pool = MySQL.createPool(this.config.mysql);
+    }
+    start() {
+        if(this.started) return console.warn('Tried to start server twice!');
+        this.started = true;
+        if(!this.jest) {
+            bot.discord = new Discord.Client();
+            bot.discord.login(this.config.discord.token);
+            console.log('Joined Discord servers.');
+            bot.discord.on('message', function(msg) {
+                if(msg.author.bot) return;
+                var wrapper = new ChatLine('Discord', msg.content, msg.createdTimestamp, function(reply) {
+                    msg.reply(reply);
                 });
-                twitch.connect();
-                twitch.on('message', function(channel, context, msg, self) {
-                    if(context['user-id'] == config.twitch.userId) return; // self is broken
+                wrapper.handle();
+            });
+            bot.checkUsers();
+            bot.on('userdata', function() {
+                bot.twitch = new Twitch.client({
+                    reconnect: true,
+                    identity: bot.config.twitch.identity,
+                    channels: bot.twitchChannels
+                });
+                bot.twitch.connect();
+                bot.twitch.on('message', function(channel, context, msg, self) {
+                    if(context['user-id'] == bot.config.twitch.userId) return; // self is broken
                     var wrapper = new ChatLine('Twitch', msg, context['tmi-sent-ts'], function(reply) {
-                        twitch.say(channel, reply);
+                        bot.twitch.say(channel, reply);
                     });
                     wrapper.handle();
                 });
-                console.log('Joined Twitch channels.', twitchChannels);
+                console.log('Joined Twitch channels.', bot.twitchChannels);
+                bot.checkYouTube();
+            });
+        }
+    }
+    checkUsers() {
+        bot.pool.query('SELECT twitchProfile, youtubeProfile FROM guilds', function(errors, results, fields) {
+            for(var i = 0; i < results.length; i++) {
+                var twitchProfile = null;
+                var youtubeProfile = null;
+                if(results[i].twitchProfile) {
+                    twitchProfile = JSON.parse(Buffer.from(results[i].twitchProfile, 'base64').toString('utf8'));
+                    if(!bot.twitchChannels.includes('#' + twitchProfile.login)) {
+                        bot.twitchChannels.push('#' + twitchProfile.login);
+                        if(bot.twitch) {
+                            console.log('Joined Twitch channel.', bot.twitchChannels);
+                            bot.twitch.join('#' + twitchProfile.login);
+                        }
+                    }
+                }
+                if(results[i].youtubeProfile) {
+                    youtubeProfile = JSON.parse(Buffer.from(results[i].youtubeProfile, 'base64').toString('utf8'));
+                    if(!bot.youtubeChannels.includes(youtubeProfile.id)) bot.youtubeChannels.push(youtubeProfile.id);
+                }
             }
-            setTimeout(getUsers, 60000);
+            if(!bot.twitch) bot.emit('userdata');
+            setTimeout(bot.checkUsers, CHECK.USERS * 1000);
         });
     }
-    getUsers();
-
-    async function getYouTubeStreams() {
-        for(var i = 0; i < youtubeChannels.length; i++) {
-            (async () => {
-                youtube = new YouTube(youtubeChannels[i], config.youtube.apiKey);
-                console.log('Checking for YouTube stream.', youtubeChannels[i]);
+    async checkYouTube() {
+        for(var i = 0; i < bot.youtubeChannels.length; i++) {
+            if(bot.youtubes.hasOwnProperty(bot.youtubeChannels[i])) return;
+            (async() => {
+                let youtube = new YouTube(bot.youtubeChannels[i], bot.config.youtube.apiKey);
+                console.log('Checking for YouTube stream.', bot.youtubeChannels[i]);
                 youtube.on('error', function(e) {
-                    if(e == 'Can not find live.') console.log('No YouTube stream.', youtubeChannels[i]);
+                    if(e == 'Can not find live.') console.log('No YouTube stream.', bot.youtubeChannels[i]);
                     else if(typeof(e) == 'object' && 'error' in e && e.error.message == 'The live chat is no longer live.') youtube.stop();
                     else console.log(e);
-                    youtube = null;
+                    youtube = bot.youtubes[bot.youtubeChannels[i]] = null;
                 });
                 youtube.on('ready', function() {
-                    console.log('Joined YouTube channel.', youtubeChannels[i]);
+                    console.log('Joined YouTube channel.', bot.youtubeChannels[i]);
+                    bot.youtubes[bot.youtubeChannels[i]] = youtube;
                     youtube.listen(1000);
                 });
                 youtube.on('message', function(data) {
                     if(data.snippet.type != 'textMessageEvent') return;
                     var time = new Date(data.snippet.publishedAt).getTime();
                     var wrapper = new ChatLine('YouTube', data.snippet.textMessageDetails.messageText, time, function(reply) {
-                        axios.post('https://www.googleapis.com/youtube/v3/liveChat/messages?part=snippet&access_token=' + config.youtube.token, {
+                        axios.post('https://www.googleapis.com/youtube/v3/liveChat/messages?part=snippet&access_token=' + bot.config.youtube.token, {
                             snippet: {
                                 type: 'textMessageEvent',
                                 liveChatId: data.snippet.liveChatId,
@@ -95,11 +115,10 @@ if(process.env.JEST_WORKER_ID === undefined) {
                     wrapper.handle();
                 });
             })();
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, CHECK.YOUTUBE_NEXT * 1000));
         }
-        setTimeout(getYouTubeStreams, 300000);
+        setTimeout(bot.checkYouTube, CHECK.YOUTUBE_FIRST * 1000);
     }
-    getYouTubeStreams();
 }
 
 class ChatLine {
@@ -117,4 +136,4 @@ class ChatLine {
     }
 }
 
-module.exports.ChatLine = ChatLine;
+module.exports = {Bot, ChatLine};
