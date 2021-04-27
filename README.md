@@ -1,2 +1,2 @@
 # Discord
-Automate debates and make your political streams interactive. Complete with a [beautiful dashboard](/Polimatk/Web).
+Automate debates and make your political streams interactive. Complete with a [beautiful dashboard](https://github.com/Polimatk/Web).
